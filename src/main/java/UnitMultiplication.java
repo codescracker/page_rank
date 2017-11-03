@@ -22,6 +22,18 @@ public class UnitMultiplication {
 
             //input format: fromPage\t toPage1,toPage2,toPage3
             //target: build transition matrix unit -> fromPage\t toPage=probability
+            String[] outputkey_nexts= value.toString().trim().split("\t");
+            if(outputkey_nexts.length<2) {
+                return;
+            }
+
+            String outputkey = outputkey_nexts[0].trim();
+            String[] nexts = outputkey_nexts[1].trim().split(",");
+            double weight = (double) 1/nexts.length;
+            for(String next: nexts){
+                String outputvalue = next + "=" + weight;
+                context.write(new Text(outputkey),new Text(outputvalue));
+            }
         }
     }
 
@@ -32,10 +44,34 @@ public class UnitMultiplication {
 
             //input format: Page\t PageRank
             //target: write to reducer
+            String[] outputkey_curr = value.toString().trim().split("\\s+");
+            if(outputkey_curr.length<2){
+                return;
+            }
+            String outputkey = outputkey_curr[0].trim();
+            String curr = outputkey_curr[1].trim();
+            context.write(new Text(outputkey),new Text(curr));
         }
     }
 
     public static class MultiplicationReducer extends Reducer<Text, Text, Text, Text> {
+
+        class Pair{
+            double weight;
+            String next;
+
+            public Pair(double weight, String next){
+                this.weight = weight;
+                this.next = next;
+            }
+        }
+
+        float beta;
+
+        public void setup(Context context){
+             Configuration configuration = context.getConfiguration();
+             beta = Float.valueOf(configuration.get("beta"));
+        }
 
 
         @Override
@@ -44,16 +80,40 @@ public class UnitMultiplication {
 
             //input key = fromPage value=<toPage=probability..., pageRank>
             //target: get the unit multiplication
+            List<Pair> pairs = new ArrayList<Pair>();
+            double curr = 0;
+
+            for(Text val :values){
+                if(val.toString().contains("=")){
+                    String[] tmp = val.toString().trim().split("=");
+                    String next = tmp[0].trim();
+                    double weight = Double.parseDouble(tmp[1].trim());
+                    pairs.add(new Pair(weight,next));
+                }else {
+                    curr = Double.parseDouble(val.toString().trim());
+                }
+            }
+
+            for(Pair pair: pairs){
+                double next_weight = (1-beta)*pair.weight * curr;
+                context.write(new Text(pair.next), new Text(String.valueOf(next_weight)));
+            }
+
+            context.write(key, new Text(String.valueOf(beta * curr)));
+
         }
     }
 
     public static void main(String[] args) throws Exception {
 
         Configuration conf = new Configuration();
+        conf.set("beta", args[3]);
         Job job = Job.getInstance(conf);
         job.setJarByClass(UnitMultiplication.class);
 
         //how chain two mapper classes?
+        ChainMapper.addMapper(job, TransitionMapper.class, Object.class, Text.class, Text.class, Text.class, conf);
+        ChainMapper.addMapper(job, PRMapper.class, Object.class, Text.class, Text.class, Text.class, conf);
 
         job.setReducerClass(MultiplicationReducer.class);
 
